@@ -1,0 +1,3 @@
+[submodule "Chip-Cloudy/Espressif/esp-idf"]
+	path = Chip-Cloudy/Espressif/esp-idf
+	url = https://github.com/espressif/esp-idf.git

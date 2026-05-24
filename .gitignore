@@ -53,3 +53,6 @@ dkms.conf
 
 # debug information files
 *.dwo
+.DS_Store
+Chip-Cloudy/Espressif/start-esp32s3/build
+Chip-Cloudy/Espressif/start-esp32s3/.cache
