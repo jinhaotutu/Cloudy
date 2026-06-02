@@ -22,7 +22,6 @@ Cloudy/
 │   ├── hal/                # 硬件抽象层（GPIO/SPI/Timer）
 │   └── driver/             # 驱动层（矩阵键盘/ST7789/LED）
 ├── app/
-│   ├── fonts/              # 字体资源（点阵字模）
 │   ├── product/            # 产品应用（食材管理/UI/告警）
 │   └── service/            # 服务层（NVS存储/时间/BLE配网）
 └── Chip-Cloudy/
