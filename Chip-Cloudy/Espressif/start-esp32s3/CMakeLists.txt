@@ -4,6 +4,7 @@ cmake_minimum_required(VERSION 3.22)
 set(EXTRA_COMPONENT_DIRS
     "${CMAKE_CURRENT_SOURCE_DIR}/../../../Adapt-Cloudy/cloud_hal"
     "${CMAKE_CURRENT_SOURCE_DIR}/../../../Adapt-Cloudy/driver"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../../../App-Cloudy/service"
     "${CMAKE_CURRENT_SOURCE_DIR}/../../../App-Cloudy/product"
 )
 

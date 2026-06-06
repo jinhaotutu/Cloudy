@@ -19,6 +19,7 @@ extern "C" {
 #define COLOR_YELLOW      0xFFE0
 #define COLOR_CYAN        0x07FF
 #define COLOR_MAGENTA     0xF81F
+#define COLOR_GRAY        0x8410
 
 /**
  * @brief 初始化 ST7789 屏幕
