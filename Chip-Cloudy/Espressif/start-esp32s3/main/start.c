@@ -1,57 +1,73 @@
+// Chip-Cloudy/Espressif/start-esp32s3/main/start.c
+// 程序入口 — 初始化驱动并创建 FreeRTOS 任务
+
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "freertos/queue.h"
 #include "esp_log.h"
 #include "esp_system.h"
-#include "esp_chip_info.h"
-#include "esp_flash.h"
-#include "sdkconfig.h"
-#include <inttypes.h>
 
-#include "esp_heap_caps.h"
+// 驱动头文件
+#include "drv_matrix_key.h"
+#include "drv_st7789.h"
+#include "drv_led.h"
 
 static const char *TAG = "cloud-start";
 
-void app_main(void)
+// 按键事件队列
+static QueueHandle_t s_key_event_queue = NULL;
+
+// 主任务
+static void main_task(void *arg)
 {
-    printf("\n\n");
-    ESP_LOGI(TAG, "Cloud Start Minimal ESP32 Project");
-
-    esp_chip_info_t chip_info;
-    uint32_t flash_size;
-    esp_chip_info(&chip_info);
-
-    ESP_LOGI(TAG, "This is %s chip with %d CPU core(s), %s%s%s%s",
-             CONFIG_IDF_TARGET,
-             chip_info.cores,
-             (chip_info.features & CHIP_FEATURE_WIFI_BGN) ? "WiFi/" : "",
-             (chip_info.features & CHIP_FEATURE_BT) ? "BT" : "",
-             (chip_info.features & CHIP_FEATURE_BLE) ? "BLE" : "",
-             (chip_info.features & CHIP_FEATURE_IEEE802154) ? ", 802.15.4 (Zigbee/Thread)" : "");
-
-    unsigned major_rev = chip_info.revision / 100;
-    unsigned minor_rev = chip_info.revision % 100;
-    ESP_LOGI(TAG, "Silicon revision v%d.%d", major_rev, minor_rev);
-
-    if(esp_flash_get_size(NULL, &flash_size) != ESP_OK) {
-        ESP_LOGE(TAG, "Get flash size failed");
-        return;
-    }
-
-    ESP_LOGI(TAG, "%" PRIu32 "MB %s flash", flash_size / (uint32_t)(1024 * 1024),
-             (chip_info.features & CHIP_FEATURE_EMB_FLASH) ? "embedded" : "external");
-
-    ESP_LOGI(TAG, "Minimum free heap size: %" PRIu32 " bytes", esp_get_minimum_free_heap_size());
-
-    size_t internal_free = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
-    size_t psram_free = heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
-    size_t total_free = esp_get_free_heap_size();
-
-    ESP_LOGI(TAG, "Internal RAM free: %zu bytes", internal_free);
-    ESP_LOGI(TAG, "PSRAM free: %zu bytes", psram_free);
-    ESP_LOGI(TAG, "Total free heap: %zu bytes", total_free);
+    key_event_t event;
 
     while (1) {
-        ESP_LOGI(TAG, "Running...");
-        vTaskDelay(pdMS_TO_TICKS(1000));
+        // 检查按键事件
+        if (xQueueReceive(s_key_event_queue, &event, pdMS_TO_TICKS(10)) == pdTRUE) {
+            ESP_LOGI(TAG, "Key event: id=%d (%s), type=%d, duration=%lums",
+                     event.key_id,
+                     drv_matrix_key_get_name(event.key_id),
+                     event.event,
+                     event.duration_ms);
+
+            // 短按确认键：切换 LED
+            if (event.key_id == KEY_ID_K8 && event.event == KEY_EVENT_SHORT_PRESS) {
+                drv_led_toggle();
+                ESP_LOGI(TAG, "LED toggled");
+            }
+        }
+    }
+}
+
+void app_main(void)
+{
+    ESP_LOGI(TAG, "Cloud Start - Driver Init");
+
+    // 1. 初始化 LED 驱动
+    drv_led_init();
+
+    // 2. 初始化矩阵键盘驱动
+    s_key_event_queue = xQueueCreate(16, sizeof(key_event_t));
+    drv_matrix_key_init();
+    drv_matrix_key_start(s_key_event_queue);
+
+    // 3. 初始化 TFT 屏幕驱动
+    drv_st7789_init();
+    drv_st7789_fill_screen(COLOR_WHITE);
+    drv_st7789_draw_string_center(40, "Cloud Start!", COLOR_BLACK, COLOR_WHITE, 2);
+    drv_st7789_draw_string_center(80, "Drivers OK", COLOR_RED, COLOR_WHITE, 2);
+
+    // 4. 启动主任务
+    xTaskCreate(main_task, "main_task", 4096, NULL, 5, NULL);
+
+    ESP_LOGI(TAG, "All drivers initialized. System running.");
+
+    // LED 闪烁 3 次表示初始化完成
+    for (int i = 0; i < 3; i++) {
+        drv_led_on();
+        vTaskDelay(pdMS_TO_TICKS(200));
+        drv_led_off();
+        vTaskDelay(pdMS_TO_TICKS(200));
     }
 }
