@@ -47,9 +47,10 @@ static key_state_t s_key_state[KEY_ID_MAX];
 static QueueHandle_t s_event_queue = NULL;
 
 // 按键名称表
+// TODO: 后续统一更新为中文显示（需添加中文字模）
 static const char *s_key_names[KEY_ID_MAX] = {
-    "NONE", "乳制品", "肉蛋类", "蔬菜类",
-    "水果类", "海鲜类", "饮品类", "冷冻类", "确认",
+    "NONE", "Dairy", "Meat", "Veggie",
+    "Fruit", "Seafood", "Drink", "Frozen", "Confirm",
 };
 
 void drv_matrix_key_init(void)

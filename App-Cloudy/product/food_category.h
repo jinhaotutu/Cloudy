@@ -34,14 +34,16 @@ typedef struct {
 } food_category_config_t;
 
 // 类别配置表（静态常量，存储在Flash）
+// TODO: 调试完成后改回天数（乘数从 60 改回 86400）
+// TODO: 后续统一更新为中文显示（需添加中文字模）
 static const food_category_config_t FOOD_CATEGORY_TABLE[FOOD_CATEGORY_COUNT] = {
-    { FOOD_CAT_DAIRY,   "乳制品", "D",  7,  1 },   // 鲜奶、酸奶、奶酪
-    { FOOD_CAT_MEAT,    "肉蛋类", "M",  3,  1 },   // 猪肉、牛肉、鸡蛋
-    { FOOD_CAT_VEG,     "蔬菜类", "V",  5,  2 },   // 青菜、番茄、黄瓜
-    { FOOD_CAT_FRUIT,   "水果类", "F",  7,  2 },   // 苹果、香蕉、葡萄
-    { FOOD_CAT_SEAFOOD, "海鲜类", "S",  2,  1 },   // 鱼虾、贝类
-    { FOOD_CAT_DRINK,   "饮品类", "K",  30, 3 },   // 果汁、啤酒
-    { FOOD_CAT_FROZEN,  "冷冻类", "I",  90, 7 },   // 速冻水饺、冻肉
+    { FOOD_CAT_DAIRY,   "Dairy",   "D",  7,  1 },   // 调试：7分钟（正式：7天）
+    { FOOD_CAT_MEAT,    "Meat",    "M",  3,  1 },   // 调试：3分钟（正式：3天）
+    { FOOD_CAT_VEG,     "Veggie",  "V",  5,  2 },   // 调试：5分钟（正式：5天）
+    { FOOD_CAT_FRUIT,   "Fruit",   "F",  7,  2 },   // 调试：7分钟（正式：7天）
+    { FOOD_CAT_SEAFOOD, "Seafood", "S",  2,  1 },   // 调试：2分钟（正式：2天）
+    { FOOD_CAT_DRINK,   "Drink",   "K",  30, 3 },   // 调试：30分钟（正式：30天）
+    { FOOD_CAT_FROZEN,  "Frozen",  "I",  90, 7 },   // 调试：90分钟（正式：90天）
 };
 
 /**

@@ -442,3 +442,205 @@ void drv_st7789_draw_string_center(uint16_t y, const char *str, uint16_t color, 
 
     drv_st7789_draw_string_scaled(x, y, str, color, bg, scale);
 }
+
+// ============ 帧缓冲实现（PSRAM） ============
+
+#include "esp_heap_caps.h"
+
+static uint16_t *s_fb = NULL;  // 帧缓冲指针
+
+bool drv_st7789_fb_init(void)
+{
+    if (s_fb) return true;  // 已初始化
+
+    // 在 PSRAM 中分配（DMA 可访问）
+    s_fb = (uint16_t *)heap_caps_malloc(TFT_WIDTH * TFT_HEIGHT * sizeof(uint16_t), MALLOC_CAP_SPIRAM);
+    if (!s_fb) {
+        ESP_LOGE(TAG, "Frame buffer alloc failed (%d bytes)", TFT_WIDTH * TFT_HEIGHT * 2);
+        return false;
+    }
+
+    ESP_LOGI(TAG, "Frame buffer init: %dKB in PSRAM", TFT_WIDTH * TFT_HEIGHT * 2 / 1024);
+    return true;
+}
+
+void drv_st7789_fb_clear(uint16_t color)
+{
+    if (!s_fb) return;
+    // 填充整个缓冲区
+    uint32_t pixel_count = TFT_WIDTH * TFT_HEIGHT;
+    uint32_t color32 = (color << 16) | color;  // 一次填 2 个像素
+    uint32_t *fb32 = (uint32_t *)s_fb;
+    for (uint32_t i = 0; i < pixel_count / 2; i++) {
+        fb32[i] = color32;
+    }
+}
+
+void drv_st7789_fb_flush(void)
+{
+    if (!s_fb) return;
+    // 设置全屏窗口
+    drv_st7789_set_window(0, 0, TFT_WIDTH - 1, TFT_HEIGHT - 1);
+    // ESP32 小端序，需要逐像素交换高低字节后发送
+    uint32_t pixel_count = TFT_WIDTH * TFT_HEIGHT;
+    for (uint32_t i = 0; i < pixel_count; i++) {
+        uint16_t c = s_fb[i];
+        hal_spi_send_data((c >> 8) & 0xFF);
+        hal_spi_send_data(c & 0xFF);
+    }
+}
+
+void drv_st7789_fb_draw_pixel(uint16_t x, uint16_t y, uint16_t color)
+{
+    if (!s_fb || x >= TFT_WIDTH || y >= TFT_HEIGHT) return;
+    s_fb[y * TFT_WIDTH + x] = color;
+}
+
+void drv_st7789_fb_fill_rect(uint16_t x, uint16_t y, uint16_t w, uint16_t h, uint16_t color)
+{
+    if (!s_fb) return;
+    if (x >= TFT_WIDTH || y >= TFT_HEIGHT) return;
+    if (x + w > TFT_WIDTH) w = TFT_WIDTH - x;
+    if (y + h > TFT_HEIGHT) h = TFT_HEIGHT - y;
+
+    for (uint16_t row = y; row < y + h; row++) {
+        uint16_t *line = &s_fb[row * TFT_WIDTH + x];
+        for (uint16_t col = 0; col < w; col++) {
+            line[col] = color;
+        }
+    }
+}
+
+void drv_st7789_fb_draw_char(uint16_t x, uint16_t y, char ch, uint16_t color, uint16_t bg)
+{
+    if (!s_fb) return;
+    if (ch < 0x20 || ch > 0x7E) ch = '?';
+
+    const uint8_t *glyph = ascii_8x16[ch - 0x20];
+
+    for (int row = 0; row < 16; row++) {
+        if (y + row >= TFT_HEIGHT) break;
+        uint8_t line = glyph[row];
+        for (int col = 0; col < 8; col++) {
+            if (x + col >= TFT_WIDTH) break;
+            s_fb[(y + row) * TFT_WIDTH + x + col] = (line & (0x80 >> col)) ? color : bg;
+        }
+    }
+}
+
+void drv_st7789_fb_draw_string(uint16_t x, uint16_t y, const char *str, uint16_t color, uint16_t bg)
+{
+    if (!s_fb) return;
+    while (*str) {
+        drv_st7789_fb_draw_char(x, y, *str, color, bg);
+        x += 8;
+        if (x + 8 > TFT_WIDTH) {
+            x = 0;
+            y += 16;
+        }
+        str++;
+    }
+}
+
+void drv_st7789_fb_draw_string_center(uint16_t y, const char *str, uint16_t color, uint16_t bg, uint8_t scale)
+{
+    if (!s_fb || scale < 1) return;
+
+    uint16_t len = 0;
+    const char *p = str;
+    while (*p++) len++;
+
+    uint16_t str_w = len * 8 * scale;
+    uint16_t x = (TFT_WIDTH > str_w) ? (TFT_WIDTH - str_w) / 2 : 0;
+
+    // 缩放绘制到帧缓冲
+    while (*str) {
+        char ch = *str;
+        if (ch < 0x20 || ch > 0x7E) ch = '?';
+        const uint8_t *glyph = ascii_8x16[ch - 0x20];
+
+        for (int row = 0; row < 16; row++) {
+            uint8_t line = glyph[row];
+            for (int rep = 0; rep < scale; rep++) {
+                uint16_t py = y + row * scale + rep;
+                if (py >= TFT_HEIGHT) break;
+                for (int col = 0; col < 8; col++) {
+                    uint16_t pixel = (line & (0x80 >> col)) ? color : bg;
+                    for (int s = 0; s < scale; s++) {
+                        uint16_t px = x + col * scale + s;
+                        if (px >= TFT_WIDTH) break;
+                        s_fb[py * TFT_WIDTH + px] = pixel;
+                    }
+                }
+            }
+        }
+        x += 8 * scale;
+        str++;
+    }
+}
+
+// ============ 1.5 倍字体（12×24） ============
+
+void drv_st7789_fb_draw_char_1_5x(uint16_t x, uint16_t y, char ch, uint16_t color, uint16_t bg)
+{
+    if (!s_fb) return;
+    if (ch < 0x20 || ch > 0x7E) ch = '?';
+
+    const uint8_t *glyph = ascii_8x16[ch - 0x20];
+
+    for (int row = 0; row < 16; row++) {
+        uint8_t line = glyph[row];
+        // 行映射：0-5 → 2px, 6-10 → 1px, 11-15 → 2px（共24px）
+        int dy, py_base;
+        if (row < 6) { dy = 2; py_base = row * 2; }
+        else if (row < 11) { dy = 1; py_base = 12 + (row - 6); }
+        else { dy = 2; py_base = 17 + (row - 11) * 2; }
+
+        for (int rep = 0; rep < dy; rep++) {
+            int py = y + py_base + rep;
+            if (py >= TFT_HEIGHT) break;
+
+            for (int col = 0; col < 8; col++) {
+                uint16_t pixel = (line & (0x80 >> col)) ? color : bg;
+                // 列映射：0-2 → 2px, 3-5 → 1px, 6-7 → 2px（共12px）
+                int dx, px_base;
+                if (col < 3) { dx = 2; px_base = col * 2; }
+                else if (col < 6) { dx = 1; px_base = 6 + (col - 3); }
+                else { dx = 2; px_base = 9 + (col - 6) * 2; }
+
+                for (int s = 0; s < dx; s++) {
+                    int px = x + px_base + s;
+                    if (px >= TFT_WIDTH) break;
+                    s_fb[py * TFT_WIDTH + px] = pixel;
+                }
+            }
+        }
+    }
+}
+
+void drv_st7789_fb_draw_string_1_5x(uint16_t x, uint16_t y, const char *str, uint16_t color, uint16_t bg)
+{
+    if (!s_fb) return;
+    while (*str) {
+        drv_st7789_fb_draw_char_1_5x(x, y, *str, color, bg);
+        x += 12;
+        if (x + 12 > TFT_WIDTH) {
+            x = 0;
+            y += 24;
+        }
+        str++;
+    }
+}
+
+void drv_st7789_fb_draw_string_center_1_5x(uint16_t y, const char *str, uint16_t color, uint16_t bg)
+{
+    if (!s_fb) return;
+    uint16_t len = 0;
+    const char *p = str;
+    while (*p++) len++;
+
+    uint16_t str_w = len * 12;
+    uint16_t x = (TFT_WIDTH > str_w) ? (TFT_WIDTH - str_w) / 2 : 0;
+
+    drv_st7789_fb_draw_string_1_5x(x, y, str, color, bg);
+}

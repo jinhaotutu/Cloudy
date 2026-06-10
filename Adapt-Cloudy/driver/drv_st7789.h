@@ -97,6 +97,54 @@ void drv_st7789_draw_string_scaled(uint16_t x, uint16_t y, const char *str, uint
  */
 void drv_st7789_draw_string_center(uint16_t y, const char *str, uint16_t color, uint16_t bg, uint8_t scale);
 
+// ============ 帧缓冲 API（PSRAM，页面合成后一次性刷新） ============
+
+/**
+ * @brief 初始化帧缓冲（在 PSRAM 中分配 240×280×2 字节）
+ * @return true=成功, false=分配失败
+ */
+bool drv_st7789_fb_init(void);
+
+/**
+ * @brief 清除帧缓冲为指定颜色
+ */
+void drv_st7789_fb_clear(uint16_t color);
+
+/**
+ * @brief 将帧缓冲一次性写入屏幕
+ */
+void drv_st7789_fb_flush(void);
+
+/**
+ * @brief 在帧缓冲中绘制像素
+ */
+void drv_st7789_fb_draw_pixel(uint16_t x, uint16_t y, uint16_t color);
+
+/**
+ * @brief 在帧缓冲中填充矩形
+ */
+void drv_st7789_fb_fill_rect(uint16_t x, uint16_t y, uint16_t w, uint16_t h, uint16_t color);
+
+/**
+ * @brief 在帧缓冲中绘制字符
+ */
+void drv_st7789_fb_draw_char(uint16_t x, uint16_t y, char ch, uint16_t color, uint16_t bg);
+
+/**
+ * @brief 在帧缓冲中绘制字符串
+ */
+void drv_st7789_fb_draw_string(uint16_t x, uint16_t y, const char *str, uint16_t color, uint16_t bg);
+
+/**
+ * @brief 在帧缓冲中居中绘制缩放字符串
+ */
+void drv_st7789_fb_draw_string_center(uint16_t y, const char *str, uint16_t color, uint16_t bg, uint8_t scale);
+
+/**
+ * @brief 在帧缓冲中绘制 1.5 倍字符串（12×24）
+ */
+void drv_st7789_fb_draw_string_center_1_5x(uint16_t y, const char *str, uint16_t color, uint16_t bg);
+
 #ifdef __cplusplus
 }
 #endif

@@ -32,7 +32,8 @@ int app_food_record(uint8_t key_id, food_record_t *record)
     new_record.extended = 0;
     new_record.shelf_life = config->default_shelf_life;
     new_record.record_time = svc_time_get_timestamp();
-    new_record.expiry_time = new_record.record_time + (int64_t)config->default_shelf_life * 86400LL;
+    // TODO: 调试完成后改回 86400LL（天）
+    new_record.expiry_time = new_record.record_time + (int64_t)config->default_shelf_life * 60LL;
 
     // 写入NVS
     uint32_t record_id;
@@ -98,7 +99,8 @@ food_status_t app_food_get_status(const food_record_t *record)
 
     if (time_to_expiry <= 0) {
         return FOOD_STATUS_EXPIRED;
-    } else if (time_to_expiry <= 2 * 86400LL) {
+    // TODO: 调试完成后改回 86400LL（天）
+    } else if (time_to_expiry <= 2 * 60LL) {
         return FOOD_STATUS_EXPIRING;
     }
 
@@ -112,7 +114,8 @@ int32_t app_food_get_remaining_days(const food_record_t *record)
     int64_t now = svc_time_get_timestamp();
     int64_t time_to_expiry = record->expiry_time - now;
 
-    return (int32_t)(time_to_expiry / 86400LL);
+    // TODO: 调试完成后改回 86400LL（天）
+    return (int32_t)(time_to_expiry / 60LL);
 }
 
 bool app_food_try_extend(uint32_t record_id, food_record_t *record)
@@ -135,7 +138,8 @@ bool app_food_try_extend(uint32_t record_id, food_record_t *record)
 
     // 执行延期
     int64_t now = svc_time_get_timestamp();
-    record->expiry_time = now + (int64_t)config->auto_extend_days * 86400LL;
+    // TODO: 调试完成后改回 86400LL（天）
+    record->expiry_time = now + (int64_t)config->auto_extend_days * 60LL;
     record->extended = 1;
 
     // 更新存储

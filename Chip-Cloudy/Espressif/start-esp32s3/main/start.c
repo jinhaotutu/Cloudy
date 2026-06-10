@@ -92,20 +92,21 @@ void app_main(void)
         nvs_flash_init();
     }
 
-    // 2. 初始化服务层
+    // 2. 初始化驱动层（硬件先就绪）
+    drv_st7789_init();
+    drv_led_init();
+
+    // 3. 初始化服务层
     svc_time_init();
     svc_storage_err_t storage_err = svc_storage_init();
     if (storage_err != SVC_STORAGE_OK) {
         ESP_LOGE(TAG, "Storage init failed: %d", storage_err);
     }
 
-    // 3. 初始化应用层
+    // 4. 初始化应用层（依赖驱动和服务）
     app_food_init();
     app_ui_init();
     app_alert_init();
-
-    // 4. 初始化驱动层
-    drv_st7789_init();
 
     // 5. 创建线程间通信对象
     s_key_queue = xQueueCreate(16, sizeof(key_event_t));

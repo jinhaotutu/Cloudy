@@ -21,7 +21,6 @@ static bool s_blink_on = false;
 void app_alert_init(void)
 {
     ESP_LOGI(TAG, "Alert module init");
-    drv_led_init();
     s_current_state = LED_STATE_OFF;
     s_blink_on = false;
     drv_led_off();
