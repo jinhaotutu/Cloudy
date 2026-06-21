@@ -8,6 +8,7 @@
 #include "freertos/semphr.h"
 #include "esp_log.h"
 #include "nvs_flash.h"
+#include "cJSON.h"
 
 // 驱动层
 #include "drv_matrix_key.h"
@@ -17,46 +18,161 @@
 // 服务层
 #include "svc_storage.h"
 #include "svc_time.h"
+#include "wifi_mqtt.h"
 
 // 应用层
 #include "app_food.h"
 #include "app_ui.h"
 #include "app_alert.h"
+#include "food_category.h"
 
 static const char *TAG = "main";
 
+// Wi-Fi / MQTT 配置
+#define WIFI_SSID           "jinhao"
+#define WIFI_PASSWORD       "361750389"
+#define MQTT_BROKER_URI     "mqtt://47.99.117.72:1883"
+#define MQTT_CLIENT_ID      "device_001"
+#define MQTT_USERNAME       "esp32_device"
+#define MQTT_PASSWORD       "fridge_device_2026"
+#define DEVICE_ID           "device_001"
+
 // 线程间通信
 static QueueHandle_t s_key_queue = NULL;
-static SemaphoreHandle_t s_expiry_semaphore = NULL;
 
-// 定时器线程 — 每60秒触发过期检查
-static void timer_task(void *arg)
+// ==================== MQTT 命令处理 ====================
+
+static void mqtt_cmd_handler(const char *data, int len)
 {
-    SemaphoreHandle_t sem = (SemaphoreHandle_t)arg;
-
-    while (1) {
-        vTaskDelay(pdMS_TO_TICKS(60000));
-        xSemaphoreGive(sem);
-        ESP_LOGI(TAG, "Expiry check triggered");
+    cJSON *root = cJSON_ParseWithLength(data, len);
+    if (!root) {
+        ESP_LOGW(TAG, "MQTT cmd: invalid JSON");
+        return;
     }
+
+    const cJSON *action = cJSON_GetObjectItem(root, "action");
+    if (!cJSON_IsString(action)) {
+        cJSON_Delete(root);
+        return;
+    }
+
+    ESP_LOGI(TAG, "MQTT cmd: action=%s", action->valuestring);
+
+    if (strcmp(action->valuestring, "query") == 0) {
+        food_record_t items[50];
+        uint32_t count = app_food_get_all(items, 50);
+
+        cJSON *resp = cJSON_CreateObject();
+        cJSON_AddStringToObject(resp, "action", "query_result");
+        cJSON *arr = cJSON_AddArrayToObject(resp, "items");
+
+        for (uint32_t i = 0; i < count; i++) {
+            cJSON *item = cJSON_CreateObject();
+            cJSON_AddNumberToObject(item, "category", items[i].category);
+            cJSON_AddNumberToObject(item, "days_left",
+                                    app_food_get_remaining_days(&items[i]));
+            cJSON_AddItemToArray(arr, item);
+        }
+
+        char *json_str = cJSON_PrintUnformatted(resp);
+        if (json_str) {
+            mqtt_publish_response(DEVICE_ID, json_str);
+            free(json_str);
+        }
+        cJSON_Delete(resp);
+
+    } else if (strcmp(action->valuestring, "delete") == 0) {
+        const cJSON *index = cJSON_GetObjectItem(root, "index");
+        if (cJSON_IsNumber(index)) {
+            int idx = index->valueint;
+            int ret = app_food_delete_by_index(idx);
+
+            cJSON *resp = cJSON_CreateObject();
+            cJSON_AddStringToObject(resp, "action", "delete_result");
+            cJSON_AddBoolToObject(resp, "success", ret == 0);
+            cJSON_AddNumberToObject(resp, "deleted_index", idx);
+
+            char *json_str = cJSON_PrintUnformatted(resp);
+            if (json_str) {
+                mqtt_publish_response(DEVICE_ID, json_str);
+                free(json_str);
+            }
+            cJSON_Delete(resp);
+        }
+
+    } else if (strcmp(action->valuestring, "clear") == 0) {
+        int ret = app_food_clear_all();
+
+        cJSON *resp = cJSON_CreateObject();
+        cJSON_AddStringToObject(resp, "action", "clear_result");
+        cJSON_AddBoolToObject(resp, "success", ret == 0);
+
+        char *json_str = cJSON_PrintUnformatted(resp);
+        if (json_str) {
+            mqtt_publish_response(DEVICE_ID, json_str);
+            free(json_str);
+        }
+        cJSON_Delete(resp);
+    }
+
+    cJSON_Delete(root);
 }
+
+// 过期检查间隔范围
+#define EXPIRY_CHECK_MIN_S    10        // 最小 10 秒（防止过于频繁）
+#define EXPIRY_CHECK_MAX_S    3600      // 最大 1 小时（兜底）
 
 // 主线程 — 事件循环
 static void main_task(void *arg)
 {
     key_event_t key;
     bool has_expiring, has_expired;
+    bool ntp_started = false;
+    bool ntp_synced = false;
+
+    // 过期检查定时：首次 10 秒后触发，之后根据最近过期事件动态调整
+    int64_t s_next_expiry_check = svc_time_get_uptime_s() + EXPIRY_CHECK_MIN_S;
+
+    // 倒计时同步定时（每小时同步一次）
+    int64_t s_next_countdown_sync = 0;
+
+    // 状态变化上报跟踪
+    static bool s_prev_expiring = false;
+    static bool s_prev_expired = false;
 
     ESP_LOGI(TAG, "Main task started");
 
     while (1) {
+        // 0. Wi-Fi 连接后启动 NTP 时间校准
+        if (!ntp_started && wifi_is_connected()) {
+            svc_time_start_ntp();
+            ntp_started = true;
+        }
+
+        int64_t now_s = svc_time_get_uptime_s();
+
+        // NTP 同步完成后：刷新界面 + 同步倒计时
+        if (!ntp_synced && svc_time_is_synced()) {
+            ntp_synced = true;
+            app_food_sync_countdown();
+            s_next_countdown_sync = now_s + 3600;  // 1 小时后再同步
+            ESP_LOGI(TAG, "NTP synced, countdown synced, refreshing UI");
+            app_ui_refresh();
+        }
+
+        // 周期同步倒计时（每小时）
+        if (ntp_synced && now_s >= s_next_countdown_sync) {
+            app_food_sync_countdown();
+            s_next_countdown_sync = now_s + 3600;
+        }
+
         // 1. 处理按键事件
         if (xQueueReceive(s_key_queue, &key, pdMS_TO_TICKS(10)) == pdTRUE) {
             app_ui_handle_key(&key);
         }
 
-        // 2. 检查过期信号量
-        if (xSemaphoreTake(s_expiry_semaphore, 0) == pdTRUE) {
+        // 2. 精确过期检查（到点触发）
+        if (now_s >= s_next_expiry_check) {
             app_food_check_expiry();
 
             // 获取最新统计，更新UI和LED
@@ -65,8 +181,39 @@ static void main_task(void *arg)
             has_expiring = (stats.expiring_count > 0);
             has_expired = (stats.expired_count > 0);
 
-            app_ui_handle_expiry_check(has_expiring, has_expired);
             app_alert_update(has_expiring, has_expired);
+
+            // 仅在状态变化时上报 MQTT
+            if (has_expiring != s_prev_expiring || has_expired != s_prev_expired) {
+                cJSON *evt = cJSON_CreateObject();
+                cJSON_AddStringToObject(evt, "action", "expiry_alert");
+                cJSON_AddNumberToObject(evt, "total", stats.total_count);
+                cJSON_AddNumberToObject(evt, "expiring", stats.expiring_count);
+                cJSON_AddNumberToObject(evt, "expired", stats.expired_count);
+
+                char *json_str = cJSON_PrintUnformatted(evt);
+                if (json_str) {
+                    mqtt_publish_event(DEVICE_ID, json_str);
+                    free(json_str);
+                }
+                cJSON_Delete(evt);
+
+                s_prev_expiring = has_expiring;
+                s_prev_expired = has_expired;
+            }
+
+            // 计算下次检查时间：精确等到下一个状态变化时刻
+            int64_t next_event_s = app_food_get_next_event_seconds();
+            if (next_event_s < 0) {
+                // 无食材，等最大间隔
+                next_event_s = EXPIRY_CHECK_MAX_S;
+            } else if (next_event_s < EXPIRY_CHECK_MIN_S) {
+                next_event_s = EXPIRY_CHECK_MIN_S;
+            } else if (next_event_s > EXPIRY_CHECK_MAX_S) {
+                next_event_s = EXPIRY_CHECK_MAX_S;
+            }
+            s_next_expiry_check = now_s + next_event_s;
+            ESP_LOGI(TAG, "Next expiry check in %lld s", (long long)next_event_s);
         }
 
         // 3. UI 更新（超时处理 + 屏幕刷新）
@@ -103,27 +250,28 @@ void app_main(void)
         ESP_LOGE(TAG, "Storage init failed: %d", storage_err);
     }
 
-    // 4. 初始化应用层（依赖驱动和服务）
+    // 4. 初始化 Wi-Fi + MQTT（非阻塞，后台自动连接）
+    ESP_LOGI(TAG, "Starting Wi-Fi...");
+    mqtt_register_cmd_callback(mqtt_cmd_handler);
+    wifi_init_sta(WIFI_SSID, WIFI_PASSWORD);
+    mqtt_app_init(MQTT_BROKER_URI, MQTT_CLIENT_ID, MQTT_USERNAME, MQTT_PASSWORD);
+
+    // 5. 初始化应用层（依赖驱动和服务）
     app_food_init();
     app_ui_init();
     app_alert_init();
 
-    // 5. 创建线程间通信对象
+    // 6. 创建线程间通信对象
     s_key_queue = xQueueCreate(16, sizeof(key_event_t));
-    s_expiry_semaphore = xSemaphoreCreateBinary();
 
-    // 6. 启动矩阵键盘扫描（内部创建独立任务）
+    // 7. 启动矩阵键盘扫描（内部创建独立任务）
     drv_matrix_key_init();
     drv_matrix_key_start(s_key_queue);
-
-    // 7. 创建定时器任务（60秒过期检查周期）
-    xTaskCreate(timer_task, "timer_task", 2048, s_expiry_semaphore, 4, NULL);
 
     // 8. 开机首次过期检查
     app_food_check_expiry();
     food_stats_t stats;
     app_food_get_stats(&stats);
-    app_ui_handle_expiry_check(stats.expiring_count > 0, stats.expired_count > 0);
     app_alert_update(stats.expiring_count > 0, stats.expired_count > 0);
 
     // 9. 创建并启动主任务

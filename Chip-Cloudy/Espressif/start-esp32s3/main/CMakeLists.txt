@@ -2,5 +2,5 @@
 idf_component_register(
     SRCS "start.c"
     INCLUDE_DIRS "."
-    REQUIRES product
+    REQUIRES product service
 )
