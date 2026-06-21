@@ -32,8 +32,8 @@ int app_food_record(uint8_t key_id, food_record_t *record)
     new_record.extended = 0;
     new_record.shelf_life = config->default_shelf_life;
     new_record.record_time = svc_time_get_timestamp();
-    // TODO: 调试完成后改回 86400LL（天）
-    new_record.expiry_time = new_record.record_time + (int64_t)config->default_shelf_life * 60LL;
+    new_record.expiry_time = new_record.record_time + (int64_t)config->default_shelf_life * 86400LL;
+    new_record.countdown_sec = (int32_t)config->default_shelf_life * 86400;  // 初始剩余秒数
 
     // 写入NVS
     uint32_t record_id;
@@ -99,8 +99,7 @@ food_status_t app_food_get_status(const food_record_t *record)
 
     if (time_to_expiry <= 0) {
         return FOOD_STATUS_EXPIRED;
-    // TODO: 调试完成后改回 86400LL（天）
-    } else if (time_to_expiry <= 2 * 60LL) {
+    } else if (time_to_expiry <= 2 * 86400LL) {
         return FOOD_STATUS_EXPIRING;
     }
 
@@ -111,11 +110,51 @@ int32_t app_food_get_remaining_days(const food_record_t *record)
 {
     if (!record) return 0;
 
-    int64_t now = svc_time_get_timestamp();
-    int64_t time_to_expiry = record->expiry_time - now;
+    if (svc_time_is_synced()) {
+        int64_t now = svc_time_get_timestamp();
+        int64_t time_to_expiry = record->expiry_time - now;
+        return (int32_t)(time_to_expiry / 86400LL);
+    }
 
-    // TODO: 调试完成后改回 86400LL（天）
-    return (int32_t)(time_to_expiry / 60LL);
+    // NTP 未同步：使用 countdown_sec
+    return record->countdown_sec / 86400;
+}
+
+int32_t app_food_get_remaining_sec(const food_record_t *record)
+{
+    if (!record) return 0;
+
+    if (svc_time_is_synced()) {
+        int64_t now = svc_time_get_timestamp();
+        return (int32_t)(record->expiry_time - now);
+    }
+
+    return record->countdown_sec;
+}
+
+void app_food_sync_countdown(void)
+{
+    if (!svc_time_is_synced()) return;
+
+    int64_t now = svc_time_get_timestamp();
+    uint32_t count = svc_storage_count();
+    uint32_t updated = 0;
+
+    for (uint32_t id = 1; id <= count + 100; id++) {
+        food_record_t record;
+        if (svc_storage_get(id, &record) == SVC_STORAGE_OK) {
+            int32_t remaining = (int32_t)(record.expiry_time - now);
+            if (record.countdown_sec != remaining) {
+                record.countdown_sec = remaining;
+                svc_storage_update(id, &record);
+                updated++;
+            }
+        }
+    }
+
+    if (updated > 0) {
+        ESP_LOGI(TAG, "Synced countdown for %lu records", (unsigned long)updated);
+    }
 }
 
 bool app_food_try_extend(uint32_t record_id, food_record_t *record)
@@ -138,8 +177,7 @@ bool app_food_try_extend(uint32_t record_id, food_record_t *record)
 
     // 执行延期
     int64_t now = svc_time_get_timestamp();
-    // TODO: 调试完成后改回 86400LL（天）
-    record->expiry_time = now + (int64_t)config->auto_extend_days * 60LL;
+    record->expiry_time = now + (int64_t)config->auto_extend_days * 86400LL;
     record->extended = 1;
 
     // 更新存储
@@ -181,4 +219,145 @@ void app_food_check_expiry(void)
 
     ESP_LOGI(TAG, "Expiry check done: total=%lu, expiring=%lu, expired=%lu",
              (unsigned long)count, (unsigned long)expiring_count, (unsigned long)expired_count);
+}
+
+int64_t app_food_get_next_event_seconds(void)
+{
+    int64_t now = svc_time_get_timestamp();
+    int64_t nearest = -1;  // -1 表示无待处理事件
+
+    uint32_t count = svc_storage_count();
+    if (count == 0) return -1;
+
+    for (uint32_t id = 1; id <= count + 100; id++) {
+        food_record_t record;
+        if (svc_storage_get(id, &record) == SVC_STORAGE_OK) {
+            int64_t time_to_expiry = record.expiry_time - now;
+
+            // 已过期 → 需要立即处理
+            if (time_to_expiry <= 0) {
+                return 0;
+            }
+
+            // 距临期时间（过期前2天）
+            int64_t time_to_expiring = time_to_expiry - 2 * 86400LL;
+            if (time_to_expiring <= 0) {
+                // 已经在临期区间，检查是否需要变为临期状态
+                // 但还没过期，等过期时间到了再触发
+                if (nearest < 0 || time_to_expiry < nearest) {
+                    nearest = time_to_expiry;
+                }
+            } else {
+                // 还是 FRESH，等临期时间到
+                if (nearest < 0 || time_to_expiring < nearest) {
+                    nearest = time_to_expiring;
+                }
+            }
+        }
+    }
+
+    return nearest;
+}
+
+// ==================== Phase 2: MQTT 远程接口 ====================
+
+uint32_t app_food_get_all(food_record_t *records, uint32_t max_count)
+{
+    if (!records || max_count == 0) return 0;
+
+    uint32_t count = svc_storage_count();
+    uint32_t collected = 0;
+
+    for (uint32_t id = 1; id <= count + 100 && collected < max_count; id++) {
+        if (svc_storage_get(id, &records[collected]) == SVC_STORAGE_OK) {
+            collected++;
+        }
+    }
+
+    ESP_LOGI(TAG, "get_all: collected %lu records", (unsigned long)collected);
+    return collected;
+}
+
+uint32_t app_food_get_sorted(food_record_t *records, uint32_t *ids, uint32_t max_count)
+{
+    if (!records || max_count == 0) return 0;
+
+    uint32_t total = svc_storage_count();
+    uint32_t collected = 0;
+
+    // 收集记录和对应的 NVS ID
+    for (uint32_t id = 1; id <= total + 100 && collected < max_count; id++) {
+        if (svc_storage_get(id, &records[collected]) == SVC_STORAGE_OK) {
+            if (ids) ids[collected] = id;
+            collected++;
+        }
+    }
+
+    if (collected <= 1) return collected;
+
+    // 冒泡排序：按 expiry_time 升序，同时交换 ID
+    for (uint32_t i = 0; i < collected - 1; i++) {
+        for (uint32_t j = 0; j < collected - 1 - i; j++) {
+            if (records[j].expiry_time > records[j + 1].expiry_time) {
+                food_record_t tmp_rec = records[j];
+                records[j] = records[j + 1];
+                records[j + 1] = tmp_rec;
+                if (ids) {
+                    uint32_t tmp_id = ids[j];
+                    ids[j] = ids[j + 1];
+                    ids[j + 1] = tmp_id;
+                }
+            }
+        }
+    }
+
+    return collected;
+}
+
+int app_food_delete_by_index(uint32_t index)
+{
+    uint32_t count = svc_storage_count();
+    uint32_t pos = 0;
+
+    for (uint32_t id = 1; id <= count + 100; id++) {
+        food_record_t dummy;
+        if (svc_storage_get(id, &dummy) == SVC_STORAGE_OK) {
+            if (pos == index) {
+                svc_storage_err_t err = svc_storage_delete(id);
+                if (err != SVC_STORAGE_OK) {
+                    ESP_LOGE(TAG, "delete_by_index failed: id=%lu err=%d", (unsigned long)id, err);
+                    return -1;
+                }
+                ESP_LOGI(TAG, "Deleted index=%lu (id=%lu)", (unsigned long)index, (unsigned long)id);
+                return 0;
+            }
+            pos++;
+        }
+    }
+
+    ESP_LOGW(TAG, "delete_by_index: index %lu not found", (unsigned long)index);
+    return -1;
+}
+
+int app_food_delete_by_nvs_id(uint32_t nvs_id)
+{
+    svc_storage_err_t err = svc_storage_delete(nvs_id);
+    if (err != SVC_STORAGE_OK) {
+        ESP_LOGE(TAG, "delete_by_nvs_id failed: id=%lu err=%d", (unsigned long)nvs_id, err);
+        return -1;
+    }
+    ESP_LOGI(TAG, "Deleted nvs_id=%lu", (unsigned long)nvs_id);
+    return 0;
+}
+
+int app_food_clear_all(void)
+{
+    svc_storage_err_t err = svc_storage_clear();
+    if (err != SVC_STORAGE_OK) {
+        ESP_LOGE(TAG, "clear_all failed: %d", err);
+        return -1;
+    }
+
+    ESP_LOGI(TAG, "All food records cleared");
+    return 0;
 }

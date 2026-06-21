@@ -25,7 +25,8 @@ typedef enum {
     KEY_ID_K6 = 6,   // 饮品类 (ROW1, COL2)
     KEY_ID_K7 = 7,   // 冷冻类 (ROW2, COL0)
     KEY_ID_K8 = 8,   // 确认键 (ROW2, COL2)
-    KEY_ID_MAX = 9,
+    KEY_ID_K9 = 9,   // 删除键 (ROW2, COL1)
+    KEY_ID_MAX = 10,
 } key_id_t;
 
 // 按键事件类型

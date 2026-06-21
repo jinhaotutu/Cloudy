@@ -27,11 +27,10 @@ static const int s_col_pins[MATRIX_COLS] = {
 };
 
 // 按键映射表：key_map[row][col] = key_id
-// (ROW2, COL1) = 空位，标记为 KEY_ID_NONE
 static const key_id_t s_key_map[MATRIX_ROWS][MATRIX_COLS] = {
     { KEY_ID_K1, KEY_ID_K2, KEY_ID_K3 },  // ROW0
     { KEY_ID_K4, KEY_ID_K5, KEY_ID_K6 },  // ROW1
-    { KEY_ID_K7, KEY_ID_NONE, KEY_ID_K8 }, // ROW2 (COL1=空位)
+    { KEY_ID_K7, KEY_ID_K9, KEY_ID_K8 },  // ROW2 (COL1=删除键)
 };
 
 // 按键状态跟踪
@@ -50,7 +49,7 @@ static QueueHandle_t s_event_queue = NULL;
 // TODO: 后续统一更新为中文显示（需添加中文字模）
 static const char *s_key_names[KEY_ID_MAX] = {
     "NONE", "Dairy", "Meat", "Veggie",
-    "Fruit", "Seafood", "Drink", "Frozen", "Confirm",
+    "Fruit", "Seafood", "Drink", "Frozen", "Confirm", "Delete",
 };
 
 void drv_matrix_key_init(void)

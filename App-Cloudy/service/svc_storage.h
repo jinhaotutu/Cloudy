@@ -11,14 +11,15 @@
 extern "C" {
 #endif
 
-// 食材记录结构体（12字节，紧凑排列）
+// 食材记录结构体
 typedef struct {
     uint8_t  category;      // 类别编号 1-7
     uint8_t  extended;      // 是否已自动延期 (0=未延期, 1=已延期)
     uint16_t shelf_life;    // 保质期天数
-    int64_t  record_time;   // 录入时间戳（开机秒数）
-    int64_t  expiry_time;   // 过期时间戳（开机秒数）
-} food_record_t;            // 共 20 字节
+    int64_t  record_time;   // 录入时间戳（Unix 秒）
+    int64_t  expiry_time;   // 过期时间戳（Unix 秒）
+    int32_t  countdown_sec; // NTP 同步时的剩余秒数（离线兜底）
+} food_record_t;            // 共 24 字节
 
 // 存储操作返回码
 typedef enum {

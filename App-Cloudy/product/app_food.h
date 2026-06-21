@@ -62,6 +62,18 @@ food_status_t app_food_get_status(const food_record_t *record);
 int32_t app_food_get_remaining_days(const food_record_t *record);
 
 /**
+ * @brief 获取食材剩余秒数（NTP 未同步时使用 countdown_sec）
+ * @param record 食材记录
+ * @return 剩余秒数（负数表示已过期）
+ */
+int32_t app_food_get_remaining_sec(const food_record_t *record);
+
+/**
+ * @brief 同步所有食材的倒计时（NTP 同步后调用）
+ */
+void app_food_sync_countdown(void);
+
+/**
  * @brief 检查并执行自动延期
  * @param record_id 记录ID
  * @param record 食材记录
@@ -74,6 +86,53 @@ bool app_food_try_extend(uint32_t record_id, food_record_t *record);
  *        遍历所有记录，检查过期状态，执行自动延期
  */
 void app_food_check_expiry(void);
+
+/**
+ * @brief 获取距最近一个状态变化的秒数
+ *        即最近一个食材从 FRESH→EXPIRING 或 EXPIRING→EXPIRED 的时间
+ * @return 秒数，无食材时返回 -1，已有过期物品时返回 0
+ */
+int64_t app_food_get_next_event_seconds(void);
+
+// ==================== Phase 2: MQTT 远程接口 ====================
+
+/**
+ * @brief 获取所有食材记录（用于远程查询）
+ * @param[out] records 输出数组（调用者分配）
+ * @param max_count 数组最大容量
+ * @return 实际记录数量
+ */
+uint32_t app_food_get_all(food_record_t *records, uint32_t max_count);
+
+/**
+ * @brief 获取按过期时间排序的食材记录（最近过期排最前）
+ * @param[out] records 输出数组（调用者分配）
+ * @param[out] ids 输出对应的 NVS 记录 ID（可为 NULL）
+ * @param max_count 数组最大容量
+ * @return 实际记录数量
+ */
+uint32_t app_food_get_sorted(food_record_t *records, uint32_t *ids, uint32_t max_count);
+
+/**
+ * @brief 按索引删除食材（用于远程删除）
+ *        索引为遍历顺序（0-based），非 record_id
+ * @param index 要删除的索引（0-based）
+ * @return 0=成功, -1=失败
+ */
+int app_food_delete_by_index(uint32_t index);
+
+/**
+ * @brief 按 NVS 记录 ID 删除食材
+ * @param nvs_id NVS 记录 ID
+ * @return 0=成功, -1=失败
+ */
+int app_food_delete_by_nvs_id(uint32_t nvs_id);
+
+/**
+ * @brief 清空所有食材（用于远程清空）
+ * @return 0=成功, -1=失败
+ */
+int app_food_clear_all(void);
 
 #ifdef __cplusplus
 }
